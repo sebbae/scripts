@@ -1,0 +1,136 @@
+#!/bin/bash
+
+download-dockerconfig() {
+  local namespace=$1 
+  local secret_name=$2
+  kubectl --namespace $namespace get secret $secret_name -o json \
+	| jq -r '.data[".dockerconfigjson"]' \
+	| base64 -d \
+	| jq
+}
+
+list-bindings() {
+  local namespace=$1 
+  kubectl --namespace $namespace get servicebindings -o json \
+    | jq -r '.items | keys[] as $b | "\(.[$b].metadata.name)  \(.[$b].spec.serviceInstanceName)"' \
+    | column -s" " -c2 -t
+}
+
+show-binding() {
+  local namespace=$1 
+  local secret_name=$2
+
+  kubectl --namespace $namespace get secrets $secret_name -o json \
+    | jq '.data | map_values(@base64d)'
+}
+
+token-for-binding() {
+  local namespace=$1 
+  local secret_name=$2
+
+  binding=$(show-binding $namespace $secret_name)
+  clientid=$(echo $binding | jq -r '.clientid')
+  clientsecret=$(echo $binding | jq -r '.clientsecret')
+  url=$(echo $binding | jq -r '.url')
+  curl -s -u $clientid:$clientsecret ${url}/oauth/token?grant_type=client_credentials
+}
+
+download-binding() {
+  local namespace=$1 
+  local secret_name=$2
+  local directory=${3}
+
+  mkdir -p $directory
+
+  values=$(kubectl --namespace $namespace get secrets $secret_name -o json \
+    | jq -r '.data | keys[] as $k | "\($k):\(.[$k])"')
+  for content in $values
+  do
+    filename=$(echo $content | cut -d':' -f1)
+    echo $content | cut -d':' -f2 | base64 --decode > $directory/$filename
+    echo "Created $directory/$filename"
+  done
+}
+
+usage="kubectl extension for Kyma operations
+namespace parameter indicates the namespace where SM secret can be found
+Usage:
+  kubectl kyma list-bindings -n <namespace>
+  kubectl kyma show-binding -n <namespace> -b|--binding <binding-name>
+  kubectl kyma token-for-binding -n <namespace> -b|--binding <binding-name>
+  kubectl kyma download-binding -n <namespace> -b|--binding <binding-name> -d|--directory <output-directory>
+  kubectl kyma download-dockerconfig -n <namespace> -s|--secret <secret-name>
+"
+
+if [ "$#" -lt 1 ]; then
+  echo "$usage"
+  exit 1
+fi
+
+namespace="default"
+binding=""
+directory="."
+command=$1
+shift
+
+while test $# -gt 0; do
+  case "$1" in
+    -n)
+      shift
+      if test $# -gt 0; then
+        export namespace=$1
+      else
+        echo "no namespace specified"
+        exit 1
+      fi
+      shift
+      ;;
+    -b|--binding)
+      shift
+      if test $# -gt 0; then
+        export binding=$1
+      else
+        echo "no binding specified"
+        exit 1
+      fi
+      shift
+      ;;
+    -s|--secret)
+      shift
+      if test $# -gt 0; then
+        export secret=$1
+      else
+        echo "no secret specified"
+        exit 1
+      fi
+      shift
+      ;;
+    -d|--directory)
+      shift
+      if test $# -gt 0; then
+        export directory=$1
+      else
+        echo "no directory specified"
+        exit 1
+      fi
+      shift
+      ;;
+    *)
+    echo "$usage"
+    exit 1
+  esac
+done
+
+if [[ "$command" == "list-bindings" ]]; then
+  list-bindings "$namespace"
+elif  [[ "$command" == "show-binding" ]]; then
+  show-binding "$namespace" "$binding"
+elif  [[ "$command" == "token-for-binding" ]]; then
+  token-for-binding "$namespace" "$binding"
+elif  [[ "$command" == "download-binding" ]]; then
+  download-binding "$namespace" "$binding" "$directory"
+elif  [[ "$command" == "download-dockerconfig" ]]; then
+  download-dockerconfig "$namespace" "$secret"
+else
+  echo "$usage"
+fi
