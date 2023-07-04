@@ -50,9 +50,19 @@ download-binding() {
     echo $content | cut -d':' -f2 | base64 --decode > $directory/$filename
     echo "Created $directory/$filename"
   done
+} 
+
+copy-secret() {
+  local namespace=$1 
+  local secret_name=$2
+  local target=$3
+
+  kubectl --namespace $namespace get secrets $secret_name -o yaml \
+    | sed '/namespace: .*/d' \
+    | kubectl apply --namespace $target -f -
 }
 
-usage="kubectl extension for Kyma operations
+usage="kubectl extension with Swiss Army Knife helpers for DevOps
 namespace parameter indicates the namespace where SM secret can be found
 Usage:
   kubectl kyma list-bindings -n <namespace>
@@ -60,6 +70,7 @@ Usage:
   kubectl kyma token-for-binding -n <namespace> -b|--binding <binding-name>
   kubectl kyma download-binding -n <namespace> -b|--binding <binding-name> -d|--directory <output-directory>
   kubectl kyma download-dockerconfig -n <namespace> -s|--secret <secret-name>
+  kubectl kyma copy-secret -n <namespace> -s|--secret <secret-name> -t|--target <target-namespace>
 "
 
 if [ "$#" -lt 1 ]; then
@@ -115,6 +126,16 @@ while test $# -gt 0; do
       fi
       shift
       ;;
+    -t|--target)
+      shift
+      if test $# -gt 0; then
+        export target=$1
+      else
+        echo "no target specified"
+        exit 1
+      fi
+      shift
+      ;;
     *)
     echo "$usage"
     exit 1
@@ -131,6 +152,8 @@ elif  [[ "$command" == "download-binding" ]]; then
   download-binding "$namespace" "$binding" "$directory"
 elif  [[ "$command" == "download-dockerconfig" ]]; then
   download-dockerconfig "$namespace" "$secret"
+elif  [[ "$command" == "copy-secret" ]]; then
+  copy-secret "$namespace" "$secret" "$target"
 else
   echo "$usage"
 fi
